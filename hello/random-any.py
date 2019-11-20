@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+from collections import defaultdict
 import gym
 import time
 
@@ -13,9 +14,16 @@ def parser():
 
 def list_environments():
     reg = gym.envs.registration.registry
-    names = reg.env_specs.keys()
-    for n in names:
-        print(n)
+    names = sorted(list(reg.env_specs.keys()))
+    by_category = defaultdict(list)
+    for name in names:
+        entry_point = reg.env_specs[name].entry_point
+        category, _ = entry_point.split(':',1)
+        by_category[category].append(name)
+    for category, names in by_category.items():
+        print(f"## {category}")
+        for name in names:
+            print(f"  {name}")
 
 def main(args):
     if args.env == 'list':
