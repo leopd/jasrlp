@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import List, Union, NamedTuple
+from typing import List, Union, NamedTuple, Tuple
 
 class Transition(NamedTuple):
     state: list
@@ -17,6 +17,10 @@ class Transition(NamedTuple):
 
 
 class ReplayBuffer():
+    """Super stupid-simple Replay buffer.  
+    Would be much better to store dense tensors, and use tensor indexing to sample.
+    Further optimizaitons would be to store that in GPU if it fits, and to encode it for downstream tasks like Q-network.
+    """
 
     def __init__(self, size:int=1000000):
         self._buffer = deque(maxlen=size)
@@ -25,6 +29,8 @@ class ReplayBuffer():
         self._buffer.append(transition)
 
     def sample(self, num:int) -> List[Transition]:
+        if num > len(self._buffer):
+            return None
         return random.sample(self._buffer, num)
 
 
@@ -45,9 +51,12 @@ class RandomLearner():
         t = Transition(observation, action, observation_next, reward)
         self._replay.append(t)
 
-    def rollout(self, max_iter:int=1000, render:bool=False):
+    def rollout(self, max_iter:int=1000, render:bool=False) -> Tuple[int, float]:
+        """Returns number of iterations and total reward
+        """
         self.env.reset()
         obs_last = None
+        total_reward = 0
         start_time = time.time()
         for cnt in range(max_iter):
             if render:
@@ -55,13 +64,20 @@ class RandomLearner():
             action = self.get_action(obs_last)
             obs, reward, is_done, info = self.env.step(action)
             self.record_transition(obs_last, action, obs, reward)
+            total_reward += reward
             obs_last = obs
             if is_done:
                 break
+            self.do_learning()
         elapsed = time.time() - start_time
         fps = cnt / elapsed
         print(f"Completed {cnt} frames at {fps:.1f}fps")
         self.env.close()
+        return cnt, total_reward
+
+    def do_learning(self):
+        # Random learner has nothing to learn
+        pass
 
 
 def one_hot(which:int, dims:int) -> Tensor:
@@ -69,14 +85,15 @@ def one_hot(which:int, dims:int) -> Tensor:
     out[which] = 1
     return out
 
-class QNetBase():
-    pass
 
+class QNetBase(nn.Module):
+    pass
 
 
 class FCNet(QNetBase):
 
     def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int]):
+        super().__init__()
         layer_dims = [input_dim] + hidden_dims + [output_classes]
         layers = []
         for i in range(len(layer_dims)-1):
@@ -89,8 +106,8 @@ class FCNet(QNetBase):
 
     def forward(self, x:Tensor) -> Tensor:
         act = self.layers(x)
+        # No final activation since we're regressing
         return act
-
 
 
 class DQN(RandomLearner):
@@ -127,11 +144,11 @@ class DQN(RandomLearner):
     def get_action(self, obs):
         if (obs is None) or (torch.rand(1).item() < self.eps):
             a = self.get_random_action()
-            print(f"random: {a}")
+            #print(f"random: {a}")
             return a
         else:
             a = self.get_greedy_action(obs)
-            print(f"greedy: {a}")
+            #print(f"greedy: {a}")
             return a
 
     def all_actions(self):
@@ -142,3 +159,10 @@ class DQN(RandomLearner):
         action = np.argmax(action_scores)
         return action
 
+    def do_learning(self):
+        minibatch_size = 128  # HYPERPARAMETER
+        batch = self._replay.sample(minibatch_size)
+        if batch is None:
+            # not enough data yet.
+            return
+        # we have enough data to train, so...
