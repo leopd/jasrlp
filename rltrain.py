@@ -37,9 +37,19 @@ class ReplayBuffer():
 class RandomLearner():
 
     def __init__(self, env):
+        self.init_env(env)
         self.env = env
         self.action_space = env.action_space
         self._replay = ReplayBuffer()
+
+    def init_env(self, env):
+        self.env = env
+        self.obs_space = env.observation_space
+        assert self.obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
+        self.act_space = env.action_space
+        assert self.act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
+        self.obs_dim = np.prod(self.obs_space.shape)
+        self.act_dim = self.act_space.n
 
     def get_random_action(self):
         return self.action_space.sample()
@@ -109,6 +119,20 @@ class FCNet(QNetBase):
         # No final activation since we're regressing
         return act
 
+    @classmethod
+    def for_env(cls, env) -> "FCNet":
+        obs_space = env.observation_space
+        assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
+        act_space = env.action_space
+        assert act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
+        obs_dim = np.prod(obs_space.shape)
+        act_dim = act_space.n
+        in_dim = obs_dim + act_dim  # Q network takes s,a as input
+        out_dim = 1  # Q network is regression to a scalar
+        print(f"Creating FCNet with {in_dim}->{out_dim} dims for {obs_dim} observations and {act_dim} actions")
+        qnet = FCNet(in_dim, out_dim, [16,16])
+        return qnet
+
 
 class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
@@ -116,22 +140,9 @@ class DQN(RandomLearner):
 
     def __init__(self, env, eps:float=0.5):
         super().__init__(env)
-        self.qnet = self.make_qnet_for_env(env)
+        self.qnet = FCNet.for_env(env)
         self.eps = eps
 
-    def make_qnet_for_env(self, env):
-        obs_space = env.observation_space
-        assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
-        act_space = env.action_space
-        assert act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
-        self.obs_dim = np.prod(obs_space.shape)
-        self.act_dim = act_space.n
-        in_dim = self.obs_dim + self.act_dim  # Q network takes s,a as input
-        out_dim = 1  # Q network is regression to a scalar
-        print(f"Creating FCNet with {in_dim}->{out_dim} dims for {self.obs_dim} observations and {self.act_dim} actions")
-        qnet = FCNet(in_dim, out_dim, [16,16])
-        return qnet
-        
 
     def calc_qval(self, observation, action):
         o_tensor = Tensor(observation)
