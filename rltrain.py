@@ -41,5 +41,20 @@ class RandomLearner():
         t = Transition(observation, action, observation_next, reward)
         self._replay.append(t)
 
+    def rollout(self, max_iter:int=1000, render:bool=False):
+        self.env.reset()
+        obs_last = None
+        for _ in range(max_iter):
+            if render:
+                self.env.render()
+            action = self.get_action()
+            obs, reward, is_done, info = self.env.step(action)
+            self.record_transition(obs_last, action, obs, reward)
+            obs_last = obs
+            if is_done:
+                break
+        self.env.close()
+        
+
 
 
