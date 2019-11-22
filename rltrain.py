@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
+import warnings
 
 from typing import List, Union, NamedTuple, Tuple
 
@@ -96,7 +97,7 @@ class RandomLearner():
             self.do_learning()
         elapsed = time.time() - start_time
         fps = cnt / elapsed
-        print(f"Completed {cnt} frames at {fps:.1f}fps")
+        print(f"Episode reward: {total_reward}. {cnt} frames at {fps:.1f}fps")
         self.env.close()
         return cnt, total_reward
 
@@ -107,13 +108,10 @@ class RandomLearner():
 
 def one_hot(which:int, dims:int) -> Tensor:
     out = torch.zeros(dims)
-    if isinstance(which, int):
-        out[which] = 1
-    elif isinstance(which, Tensor):
+    if isinstance(which, Tensor):
         out[which.long()] = 1
     else:
-        import pdb; pdb.set_trace()
-        raise RuntimeError("Unsupported type")
+        out[which] = 1
     return out
 
 
@@ -180,11 +178,13 @@ class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
     """
 
-    def __init__(self, env, eps:float=0.5):
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99):
         super().__init__(env)
         self.qnet = FCNet.for_env(env)
         self.eps = eps
-
+        self.gamma = gamma
+        self.opt = torch.optim.Adam(params=self.qnet.parameters())
+        self.iter_cnt = 0
 
     def get_action(self, obs):
         if (obs is None) or (torch.rand(1).item() < self.eps):
@@ -199,17 +199,37 @@ class DQN(RandomLearner):
     def all_actions(self):
         return range(self.env.action_space.n)
 
-    def get_greedy_action(self, obs):
+    def get_greedy_action(self, obs, use_target_network:bool=False):
+        if use_target_network:
+            warnings.warn("TODO: target network")
         action_scores = [self.qnet.calc_qval(obs,a) for a in self.all_actions()]
         action = np.argmax(action_scores)
         return action
 
     def do_learning(self):
-        minibatch_size = 128  # HYPERPARAMETER
+        self.iter_cnt += 1
+        minibatch_size = 16  # HYPERPARAMETER
         batch = self._replay.sample(minibatch_size)
         if batch is None:
             # not enough data yet.
             return
 
+        # we have a minibatch.  Let's do this.
+        self.opt.zero_grad()
         s, a, s1, r = batch
         q_online = self.qnet.calc_qval_batch(s, a)
+        assert len(q_online) == minibatch_size
+        q_s1_amax = []
+        for n in range(minibatch_size): #TODO: vectorize this...
+            a1max = self.get_greedy_action(s1[n], use_target_network=True)
+            q = self.qnet.calc_qval(s1[n,:], a1max)
+            q_s1_amax.append(q)
+        q_s1_amax = torch.Tensor(q_s1_amax)
+        q_target = r + self.gamma * q_s1_amax
+
+        loss = ((q_online - q_target)**2).mean()
+        if self.iter_cnt % 20 == 0:
+            print(f"Loss = {loss:.5f}")
+        loss.backward()
+        self.opt.step()
+
