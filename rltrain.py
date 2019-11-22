@@ -102,8 +102,9 @@ class QNetBase(nn.Module):
 
 class FCNet(QNetBase):
 
-    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int]):
+    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], act_dim:int):
         super().__init__()
+        self.act_dim = act_dim
         layer_dims = [input_dim] + hidden_dims + [output_classes]
         layers = []
         for i in range(len(layer_dims)-1):
@@ -119,6 +120,26 @@ class FCNet(QNetBase):
         # No final activation since we're regressing
         return act
 
+    def calc_qval(self, observation, action):
+        """Calculates a single q-value
+        """
+        o_tensor = Tensor(observation)
+        a_tensor = one_hot(action, self.act_dim)
+        qin = torch.cat([o_tensor, a_tensor])
+        qin = qin.unsqueeze(0)  # add minibatch dimension
+        out = self.forward(qin)
+        return out
+
+    def calc_qval_batch(self, observations, actions):
+        """Calculates a single q-value
+        """
+        o_tensor = Tensor(observations)
+        a_tensor = torch.stack([one_hot(a, self.act_dim) for a in actions])
+        assert o_tensor.shape[0] == a_tensor.shape[0]
+        qin = torch.cat([o_tensor, a_tensor], dim=1)
+        out = self.forward(qin)
+        return out
+
     @classmethod
     def for_env(cls, env) -> "FCNet":
         obs_space = env.observation_space
@@ -130,7 +151,7 @@ class FCNet(QNetBase):
         in_dim = obs_dim + act_dim  # Q network takes s,a as input
         out_dim = 1  # Q network is regression to a scalar
         print(f"Creating FCNet with {in_dim}->{out_dim} dims for {obs_dim} observations and {act_dim} actions")
-        qnet = FCNet(in_dim, out_dim, [16,16])
+        qnet = FCNet(in_dim, out_dim, [16,16], act_dim)
         return qnet
 
 
@@ -143,14 +164,6 @@ class DQN(RandomLearner):
         self.qnet = FCNet.for_env(env)
         self.eps = eps
 
-
-    def calc_qval(self, observation, action):
-        o_tensor = Tensor(observation)
-        a_tensor = one_hot(action, self.act_dim)
-        qin = torch.cat([o_tensor, a_tensor])
-        qin = qin.unsqueeze(0)  # add minibatch dimension
-        out = self.qnet.forward(qin)
-        return out
 
     def get_action(self, obs):
         if (obs is None) or (torch.rand(1).item() < self.eps):
@@ -166,7 +179,7 @@ class DQN(RandomLearner):
         return range(self.env.action_space.n)
 
     def get_greedy_action(self, obs):
-        action_scores = [self.calc_qval(obs,a) for a in self.all_actions()]
+        action_scores = [self.qnet.calc_qval(obs,a) for a in self.all_actions()]
         action = np.argmax(action_scores)
         return action
 
