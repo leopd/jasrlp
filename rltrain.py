@@ -26,12 +26,27 @@ class ReplayBuffer():
         self._buffer = deque(maxlen=size)
 
     def append(self, transition:Transition):
+        for val in transition:
+            if val is None:
+                # Something is None - skip
+                return
         self._buffer.append(transition)
 
-    def sample(self, num:int) -> List[Transition]:
+    def sample(self, num:int) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Returns a tuple of (s, a, s1, r) where each is a minibatch-sized tensor.
+        """
         if num > len(self._buffer):
             return None
-        return random.sample(self._buffer, num)
+        transition_list = random.sample(self._buffer, num)
+        # Convert these to tensors.
+        out = []
+        example = transition_list[0]
+        for i in range(len(example)):
+            tensor = torch.Tensor([t[i] for t in transition_list])
+            #if len(tensor.shape) == 1:
+                #tensor = tensor.unsqueeze(0)
+            out.append(tensor)
+        return out
 
 
 class RandomLearner():
@@ -92,7 +107,13 @@ class RandomLearner():
 
 def one_hot(which:int, dims:int) -> Tensor:
     out = torch.zeros(dims)
-    out[which] = 1
+    if isinstance(which, int):
+        out[which] = 1
+    elif isinstance(which, Tensor):
+        out[which.long()] = 1
+    else:
+        import pdb; pdb.set_trace()
+        raise RuntimeError("Unsupported type")
     return out
 
 
@@ -189,4 +210,6 @@ class DQN(RandomLearner):
         if batch is None:
             # not enough data yet.
             return
-        # we have enough data to train, so...
+
+        s, a, s1, r = batch
+        q_online = self.qnet.calc_qval_batch(s, a)
