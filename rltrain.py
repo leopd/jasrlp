@@ -1,5 +1,7 @@
 from collections import deque
+import numpy as np
 import random
+import time
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -36,7 +38,7 @@ class RandomLearner():
     def get_random_action(self):
         return self.action_space.sample()
 
-    def get_action(self):
+    def get_action(self, obs):
         return self.get_random_action()
 
     def record_transition(self, observation, action, observation_next, reward):
@@ -46,27 +48,30 @@ class RandomLearner():
     def rollout(self, max_iter:int=1000, render:bool=False):
         self.env.reset()
         obs_last = None
-        for _ in range(max_iter):
+        start_time = time.time()
+        for cnt in range(max_iter):
             if render:
                 self.env.render()
-            action = self.get_action()
+            action = self.get_action(obs_last)
             obs, reward, is_done, info = self.env.step(action)
             self.record_transition(obs_last, action, obs, reward)
             obs_last = obs
             if is_done:
                 break
+        elapsed = time.time() - start_time
+        fps = cnt / elapsed
+        print(f"Completed {cnt} frames at {fps:.1f}fps")
         self.env.close()
 
 
+def one_hot(which:int, dims:int) -> Tensor:
+    out = torch.zeros(dims)
+    out[which] = 1
+    return out
+
 class QNetBase():
+    pass
 
-
-    def qval(self, observation, action):
-        o_tensor = Tensor(observation)
-        a_tensor = Tensor(action)
-        qin = torch.cat([o_tensor, a_tensor])
-        qval = self.forward(qin)
-        return qval
 
 
 class FCNet(QNetBase):
@@ -78,29 +83,15 @@ class FCNet(QNetBase):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             layers.append(nn.Linear(in_dim, out_dim))
-            layers.append(nn.ReLU)
-
+            layers.append(nn.ReLU())
         layers = layers[:-1]  # remove last ReLU
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x:Tensor) -> Tensor:
         act = self.layers(x)
-        out = F.log_softmaxs(a)
-        return out
+        return act
 
 
-def make_qnet_for_env(env):
-    obs_space = env.observation_space
-    assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
-    act_space = env.observation_space
-    assert act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
-    obs_dim = np.prod(obs_space.shape)
-    act_dim = act_space.n
-    in_dim = obs_dim + act_dim  # Q network takes s,a as input
-    out_dim = 1  # Q network is regression to a scalar
-    qnet = FCNet(in_dim, out_dim, [16,16])
-    return qnet
-        
 
 class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
@@ -108,17 +99,46 @@ class DQN(RandomLearner):
 
     def __init__(self, env, eps:float=0.5):
         super().__init__(env)
-        self.qnet = make_qnet_for_env(env)
+        self.qnet = self.make_qnet_for_env(env)
         self.eps = eps
 
+    def make_qnet_for_env(self, env):
+        obs_space = env.observation_space
+        assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
+        act_space = env.action_space
+        assert act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
+        self.obs_dim = np.prod(obs_space.shape)
+        self.act_dim = act_space.n
+        in_dim = self.obs_dim + self.act_dim  # Q network takes s,a as input
+        out_dim = 1  # Q network is regression to a scalar
+        print(f"Creating FCNet with {in_dim}->{out_dim} dims for {self.obs_dim} observations and {self.act_dim} actions")
+        qnet = FCNet(in_dim, out_dim, [16,16])
+        return qnet
+        
+
+    def calc_qval(self, observation, action):
+        o_tensor = Tensor(observation)
+        a_tensor = one_hot(action, self.act_dim)
+        qin = torch.cat([o_tensor, a_tensor])
+        qin = qin.unsqueeze(0)  # add minibatch dimension
+        out = self.qnet.forward(qin)
+        return out
+
     def get_action(self, obs):
-        if torch.rand(1).item < self.eps:
-            return self.get_random_action()
+        if (obs is None) or (torch.rand(1).item() < self.eps):
+            a = self.get_random_action()
+            print(f"random: {a}")
+            return a
         else:
-            return self.get_greedy_action(obs)
+            a = self.get_greedy_action(obs)
+            print(f"greedy: {a}")
+            return a
+
+    def all_actions(self):
+        return range(self.env.action_space.n)
 
     def get_greedy_action(self, obs):
-        action_scores = [self.qnet.qval(obs,a) for a in self.all_actions()]
+        action_scores = [self.calc_qval(obs,a) for a in self.all_actions()]
         action = np.argmax(action_scores)
         return action
 
