@@ -1,3 +1,4 @@
+import copy
 from collections import deque
 import numpy as np
 import random
@@ -125,6 +126,8 @@ class QNetBase(nn.Module):
     pass
 
 
+#TODO: refactor all this so that the net outputs a Q value for each class simultaneously.
+# More efficient, and easier for the net to distinguish appropriate actions.
 class FCNet(QNetBase):
 
     def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], act_dim:int):
@@ -136,7 +139,8 @@ class FCNet(QNetBase):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             layers.append(nn.Linear(in_dim, out_dim))
-            layers.append(nn.ReLU())
+            #layers.append(nn.ReLU())
+            layers.append(nn.Tanh())
         layers = layers[:-1]  # remove last ReLU
         self.layers = nn.Sequential(*layers)
 
@@ -176,7 +180,7 @@ class FCNet(QNetBase):
         in_dim = obs_dim + act_dim  # Q network takes s,a as input
         out_dim = 1  # Q network is regression to a scalar
         print(f"Creating FCNet with {in_dim}->{out_dim} dims for {obs_dim} observations and {act_dim} actions")
-        qnet = FCNet(in_dim, out_dim, [16,16], act_dim)
+        qnet = FCNet(in_dim, out_dim, [128], act_dim)
         return qnet
 
 
@@ -187,10 +191,20 @@ class DQN(RandomLearner):
     def __init__(self, env, eps:float=0.5, gamma:float=0.99):
         super().__init__(env)
         self.qnet = FCNet.for_env(env)
+        self.copy_to_target()
+        #self.loss_func = nn.SmoothL1Loss()
+        self.loss_func = lambda x,y: ((x-y)**2).mean()
         self.eps = eps
         self.gamma = gamma
         self.opt = torch.optim.Adam(params=self.qnet.parameters())
+        #self.opt = torch.optim.SGD(params=self.qnet.parameters(), lr=0.01)
         self.iter_cnt = 0
+        self.minibatch_size = 32  # HYPERPARAMETER
+
+    def copy_to_target(self):
+        """Copies the online Q network to the target network
+        """
+        self.target_qnet = copy.deepcopy(self.qnet)
 
     def get_action(self, obs):
         if (obs is None) or (torch.rand(1).item() < self.eps):
@@ -207,15 +221,16 @@ class DQN(RandomLearner):
 
     def get_greedy_action(self, obs, use_target_network:bool=False):
         if use_target_network:
-            warnings.warn("TODO: target network")
+            net = self.target_qnet
+        else:
+            net = self.qnet
         action_scores = [self.qnet.calc_qval(obs,a) for a in self.all_actions()]
         action = np.argmax(action_scores)
         return action
 
     @timebudget
     def do_learning(self):
-        self.iter_cnt += 1
-        minibatch_size = 16  # HYPERPARAMETER
+        minibatch_size = self.minibatch_size
         batch = self._replay.sample(minibatch_size)
         if batch is None:
             # not enough data yet.
@@ -226,6 +241,7 @@ class DQN(RandomLearner):
         s, a, s1, r, f = batch
         q_online = self.qnet.calc_qval_batch(s, a)
         assert len(q_online) == minibatch_size
+        #q_online = q_online.view(-1)  #... for some reason, this causes everything to explode with huber loss, but makes warning go away
         with timebudget('q_target'):
             q_s1_amax = []
             for n in range(minibatch_size): #TODO: vectorize this...
@@ -240,9 +256,13 @@ class DQN(RandomLearner):
             q_target = r + self.gamma * q_s1_amax
 
         with timebudget('optimizer'):
-            loss = ((q_online - q_target)**2).mean()
+            loss = self.loss_func(q_online, q_target)
             if self.iter_cnt % 200 == 0:
                 print(f"Loss = {loss:.5f}")
             loss.backward()
             self.opt.step()
+
+        self.iter_cnt += 1
+        if self.iter_cnt % 1000 == 0:
+            self.copy_to_target()
 
