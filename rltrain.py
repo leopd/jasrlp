@@ -224,7 +224,7 @@ class DQN(RandomLearner):
         # Pick the appropriate "a" column from all the actions. 
         q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
         assert q_online.numel() == minibatch_size
-        q_online = q_online.view(-1)  # huber loss complains without this, and it seems important.
+        q_online = q_online.view(-1)  # Must make this a single dim vector.
         with timebudget('q_target'):
             q_s1 = self.target_qnet.calc_qval_batch(s1)
             q_s1_amax = q_s1.max(dim=1)[0]
@@ -232,6 +232,7 @@ class DQN(RandomLearner):
             q_target = r + future_r
 
         with timebudget('optimizer'):
+            assert q_online.shape == q_target.shape  # Subtracting column vectors from row vectors leads to badness.
             loss = self.loss_func(q_online, q_target)
             if self.iter_cnt % self.show_loss_every == 0:
                 print(f"Loss = {loss:.5f}")
