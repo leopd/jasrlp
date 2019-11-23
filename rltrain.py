@@ -8,6 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 
+from timebudget import timebudget
+timebudget.set_quiet()
+
 from typing import List, Union, NamedTuple, Tuple
 
 class Transition(NamedTuple):
@@ -15,7 +18,7 @@ class Transition(NamedTuple):
     action: int
     state1: list
     reward: float
-
+    is_final: int  # 1 for True
 
 class ReplayBuffer():
     """Super stupid-simple Replay buffer.  
@@ -33,8 +36,9 @@ class ReplayBuffer():
                 return
         self._buffer.append(transition)
 
+    @timebudget
     def sample(self, num:int) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Returns a tuple of (s, a, s1, r) where each is a minibatch-sized tensor.
+        """Returns a tuple of (s, a, s1, r, f) where each is a minibatch-sized tensor.
         """
         if num > len(self._buffer):
             return None
@@ -73,10 +77,12 @@ class RandomLearner():
     def get_action(self, obs):
         return self.get_random_action()
 
-    def record_transition(self, observation, action, observation_next, reward):
-        t = Transition(observation, action, observation_next, reward)
+    def record_transition(self, observation, action, observation_next, reward, is_final):
+        is_final = 1 if is_final else 0
+        t = Transition(observation, action, observation_next, reward, is_final)
         self._replay.append(t)
 
+    @timebudget
     def rollout(self, max_iter:int=1000, render:bool=False) -> Tuple[int, float]:
         """Returns number of iterations and total reward
         """
@@ -89,7 +95,7 @@ class RandomLearner():
                 self.env.render()
             action = self.get_action(obs_last)
             obs, reward, is_done, info = self.env.step(action)
-            self.record_transition(obs_last, action, obs, reward)
+            self.record_transition(obs_last, action, obs, reward, is_done)
             total_reward += reward
             obs_last = obs
             if is_done:
@@ -97,7 +103,7 @@ class RandomLearner():
             self.do_learning()
         elapsed = time.time() - start_time
         fps = cnt / elapsed
-        print(f"Episode reward: {total_reward}. {cnt} frames at {fps:.1f}fps")
+        #print(f"Episode reward: {total_reward}. {cnt} frames at {fps:.1f}fps")
         self.env.close()
         return cnt, total_reward
 
@@ -150,7 +156,7 @@ class FCNet(QNetBase):
         return out
 
     def calc_qval_batch(self, observations, actions):
-        """Calculates a single q-value
+        """Calculates a minibatch of q-values
         """
         o_tensor = Tensor(observations)
         a_tensor = torch.stack([one_hot(a, self.act_dim) for a in actions])
@@ -206,6 +212,7 @@ class DQN(RandomLearner):
         action = np.argmax(action_scores)
         return action
 
+    @timebudget
     def do_learning(self):
         self.iter_cnt += 1
         minibatch_size = 16  # HYPERPARAMETER
@@ -216,20 +223,26 @@ class DQN(RandomLearner):
 
         # we have a minibatch.  Let's do this.
         self.opt.zero_grad()
-        s, a, s1, r = batch
+        s, a, s1, r, f = batch
         q_online = self.qnet.calc_qval_batch(s, a)
         assert len(q_online) == minibatch_size
-        q_s1_amax = []
-        for n in range(minibatch_size): #TODO: vectorize this...
-            a1max = self.get_greedy_action(s1[n], use_target_network=True)
-            q = self.qnet.calc_qval(s1[n,:], a1max)
-            q_s1_amax.append(q)
-        q_s1_amax = torch.Tensor(q_s1_amax)
-        q_target = r + self.gamma * q_s1_amax
+        with timebudget('q_target'):
+            q_s1_amax = []
+            for n in range(minibatch_size): #TODO: vectorize this...
+                if f[n]:
+                    # Final transition. No q next.
+                    q_s1_amax.append(0)
+                else:
+                    a1max = self.get_greedy_action(s1[n], use_target_network=True)
+                    q = self.qnet.calc_qval(s1[n,:], a1max)
+                    q_s1_amax.append(q)
+            q_s1_amax = torch.Tensor(q_s1_amax)
+            q_target = r + self.gamma * q_s1_amax
 
-        loss = ((q_online - q_target)**2).mean()
-        if self.iter_cnt % 20 == 0:
-            print(f"Loss = {loss:.5f}")
-        loss.backward()
-        self.opt.step()
+        with timebudget('optimizer'):
+            loss = ((q_online - q_target)**2).mean()
+            if self.iter_cnt % 200 == 0:
+                print(f"Loss = {loss:.5f}")
+            loss.backward()
+            self.opt.step()
 
