@@ -158,6 +158,7 @@ class FCNet(QNetBase):
         act_dim = act_space.n
         print(f"Creating FCNet with {obs_dim}->{act_dim} dims for {obs_dim} observations and {act_dim} actions")
         qnet = FCNet(obs_dim, act_dim, hidden_dims=[64], activation=nn.Tanh)
+        #qnet = FCNet(obs_dim, act_dim, hidden_dims=[32,32], activation=nn.ReLU)
         return qnet
 
 
@@ -178,7 +179,7 @@ class DQN(RandomLearner):
         self.iter_cnt = 0
         self.minibatch_size = 32  # HYPERPARAMETER
         self.show_loss_every = 1000 # HYPERPARAMETER
-        self.minimum_transitions_in_replay = 40000 # HYPERPARAMETER
+        self.minimum_transitions_in_replay = 10000 # HYPERPARAMETER
         self.copy_to_target_every = 1000 # HYPERPARAMETER
 
     def copy_to_target(self):
@@ -223,7 +224,7 @@ class DQN(RandomLearner):
         # Pick the appropriate "a" column from all the actions. 
         q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
         assert q_online.numel() == minibatch_size
-        #q_online = q_online.view(-1)  #... for some reason, this causes everything to explode with huber loss, but makes warning go away
+        q_online = q_online.view(-1)  # huber loss complains without this, and it seems important.
         with timebudget('q_target'):
             q_s1 = self.target_qnet.calc_qval_batch(s1)
             q_s1_amax = q_s1.max(dim=1)[0]
