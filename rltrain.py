@@ -27,7 +27,7 @@ class ReplayBuffer():
     Further optimizaitons would be to store that in GPU if it fits, and to encode it for downstream tasks like Q-network.
     """
 
-    def __init__(self, size:int=1000000):
+    def __init__(self, size:int=(1000 * 100)):
         self._buffer = deque(maxlen=size)
 
     def append(self, transition:Transition):
@@ -53,6 +53,9 @@ class ReplayBuffer():
                 #tensor = tensor.unsqueeze(0)
             out.append(tensor)
         return out
+
+    def __len__(self):
+        return len(self._buffer)
 
 
 class RandomLearner():
@@ -85,10 +88,9 @@ class RandomLearner():
 
     @timebudget
     def rollout(self, max_iter:int=1000, render:bool=False) -> Tuple[int, float]:
-        """Returns number of iterations and total reward
+        """Runs an episode from reset to done. Returns number of iterations and total reward
         """
-        self.env.reset()
-        obs_last = None
+        obs_last = self.env.reset()
         total_reward = 0
         start_time = time.time()
         for cnt in range(max_iter):
@@ -121,7 +123,7 @@ class QNetBase(nn.Module):
 # More efficient, and easier for the net to distinguish appropriate actions.
 class FCNet(QNetBase):
 
-    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int]):
+    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], activation=nn.ReLU):
         super().__init__()
         layer_dims = [input_dim] + hidden_dims + [output_classes]
         layers = []
@@ -129,8 +131,7 @@ class FCNet(QNetBase):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             layers.append(nn.Linear(in_dim, out_dim))
-            #layers.append(nn.ReLU())
-            layers.append(nn.Tanh())
+            layers.append(activation())
         layers = layers[:-1]  # remove last ReLU
         self.layers = nn.Sequential(*layers)
 
@@ -156,7 +157,7 @@ class FCNet(QNetBase):
         obs_dim = np.prod(obs_space.shape)
         act_dim = act_space.n
         print(f"Creating FCNet with {obs_dim}->{act_dim} dims for {obs_dim} observations and {act_dim} actions")
-        qnet = FCNet(obs_dim, act_dim, [128])
+        qnet = FCNet(obs_dim, act_dim, hidden_dims=[64], activation=nn.Tanh)
         return qnet
 
 
@@ -168,19 +169,23 @@ class DQN(RandomLearner):
         super().__init__(env)
         self.qnet = FCNet.for_env(env)
         self.copy_to_target()
-        #self.loss_func = nn.SmoothL1Loss()
-        self.loss_func = lambda x,y: ((x-y)**2).mean()
+        self.loss_func = nn.SmoothL1Loss()  # huber loss
+        #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
         self.eps = eps
         self.gamma = gamma
-        self.opt = torch.optim.Adam(params=self.qnet.parameters())
-        #self.opt = torch.optim.SGD(params=self.qnet.parameters(), lr=0.01)
+        self.opt = torch.optim.Adam(params=self.qnet.parameters(), lr=1e-4)
+        #self.opt = torch.optim.SGD(params=self.qnet.parameters(), lr=0.3)
         self.iter_cnt = 0
         self.minibatch_size = 32  # HYPERPARAMETER
+        self.show_loss_every = 1000 # HYPERPARAMETER
+        self.minimum_transitions_in_replay = 40000 # HYPERPARAMETER
+        self.copy_to_target_every = 1000 # HYPERPARAMETER
 
     def copy_to_target(self):
         """Copies the online Q network to the target network
         """
         self.target_qnet = copy.deepcopy(self.qnet)
+        self.target_qnet.eval()
 
     def get_action(self, obs):
         if (obs is None) or (torch.rand(1).item() < self.eps):
@@ -195,27 +200,27 @@ class DQN(RandomLearner):
     def all_actions(self):
         return range(self.env.action_space.n)
 
-    def get_greedy_action(self, obs, use_target_network:bool=False):
-        if use_target_network:
-            net = self.target_qnet
-        else:
-            net = self.qnet
-        action_scores = self.qnet.calc_qval_batch([obs])
-        action = torch.argmax(action_scores[0,:]).item()
-        return action
+    def get_greedy_action(self, obs):
+        with torch.no_grad():
+            self.qnet.eval()
+            action_scores = self.qnet.calc_qval_batch([obs])
+            action = torch.argmax(action_scores[0,:]).item()
+            return action
 
     @timebudget
     def do_learning(self):
+        if len(self._replay) < self.minimum_transitions_in_replay:
+            return
         minibatch_size = self.minibatch_size
         batch = self._replay.sample(minibatch_size)
-        if batch is None:
-            # not enough data yet.
-            return
+        assert batch is not None
 
         # we have a minibatch.  Let's do this.
         self.opt.zero_grad()
+        self.qnet.train()
         s, a, s1, r, f = batch
         q_online_all_a = self.qnet.calc_qval_batch(s)
+        # Pick the appropriate "a" column from all the actions. 
         q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
         assert q_online.numel() == minibatch_size
         #q_online = q_online.view(-1)  #... for some reason, this causes everything to explode with huber loss, but makes warning go away
@@ -227,12 +232,12 @@ class DQN(RandomLearner):
 
         with timebudget('optimizer'):
             loss = self.loss_func(q_online, q_target)
-            if self.iter_cnt % 200 == 0:
+            if self.iter_cnt % self.show_loss_every == 0:
                 print(f"Loss = {loss:.5f}")
             loss.backward()
             self.opt.step()
 
         self.iter_cnt += 1
-        if self.iter_cnt % 1000 == 0:
+        if self.iter_cnt % self.copy_to_target_every == 0:
             self.copy_to_target()
 
