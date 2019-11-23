@@ -19,15 +19,15 @@ def test_qval_batch():
     qnet = rltrain.FCNet.for_env(env)
     N = 50
     obs = []
-    acts = []
     # Generate some valid observations any which way
     env.reset()
     for _ in range(N):
         a = env.action_space.sample()
         s1, r, _, _ = env.step(a)
         obs.append(s1)
-        acts.append(a)
 
-    qvals = qnet.calc_qval_batch(obs, acts)
-    assert len(qvals) == N
+    qvals = qnet.calc_qval_batch(obs)
+    assert len(qvals.shape) == 2
+    assert qvals.shape[0] == N
+    assert qvals.shape[1] == env.action_space.n
 

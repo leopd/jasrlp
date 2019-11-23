@@ -113,15 +113,6 @@ class RandomLearner():
         pass
 
 
-def one_hot(which:int, dims:int) -> Tensor:
-    out = torch.zeros(dims)
-    if isinstance(which, Tensor):
-        out[which.long()] = 1
-    else:
-        out[which] = 1
-    return out
-
-
 class QNetBase(nn.Module):
     pass
 
@@ -130,9 +121,8 @@ class QNetBase(nn.Module):
 # More efficient, and easier for the net to distinguish appropriate actions.
 class FCNet(QNetBase):
 
-    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], act_dim:int):
+    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int]):
         super().__init__()
-        self.act_dim = act_dim
         layer_dims = [input_dim] + hidden_dims + [output_classes]
         layers = []
         for i in range(len(layer_dims)-1):
@@ -149,23 +139,11 @@ class FCNet(QNetBase):
         # No final activation since we're regressing
         return act
 
-    def calc_qval(self, observation, action):
-        """Calculates a single q-value
-        """
-        o_tensor = Tensor(observation)
-        a_tensor = one_hot(action, self.act_dim)
-        qin = torch.cat([o_tensor, a_tensor])
-        qin = qin.unsqueeze(0)  # add minibatch dimension
-        out = self.forward(qin)
-        return out
-
-    def calc_qval_batch(self, observations, actions):
+    def calc_qval_batch(self, observations):
         """Calculates a minibatch of q-values
         """
         o_tensor = Tensor(observations)
-        a_tensor = torch.stack([one_hot(a, self.act_dim) for a in actions])
-        assert o_tensor.shape[0] == a_tensor.shape[0]
-        qin = torch.cat([o_tensor, a_tensor], dim=1)
+        qin = o_tensor
         out = self.forward(qin)
         return out
 
@@ -177,10 +155,8 @@ class FCNet(QNetBase):
         assert act_space.__class__.__name__ == "Discrete", "Only Discrete action spaces supported"
         obs_dim = np.prod(obs_space.shape)
         act_dim = act_space.n
-        in_dim = obs_dim + act_dim  # Q network takes s,a as input
-        out_dim = 1  # Q network is regression to a scalar
-        print(f"Creating FCNet with {in_dim}->{out_dim} dims for {obs_dim} observations and {act_dim} actions")
-        qnet = FCNet(in_dim, out_dim, [128], act_dim)
+        print(f"Creating FCNet with {obs_dim}->{act_dim} dims for {obs_dim} observations and {act_dim} actions")
+        qnet = FCNet(obs_dim, act_dim, [128])
         return qnet
 
 
@@ -224,8 +200,8 @@ class DQN(RandomLearner):
             net = self.target_qnet
         else:
             net = self.qnet
-        action_scores = [self.qnet.calc_qval(obs,a) for a in self.all_actions()]
-        action = np.argmax(action_scores)
+        action_scores = self.qnet.calc_qval_batch([obs])
+        action = torch.argmax(action_scores[0,:]).item()
         return action
 
     @timebudget
@@ -239,21 +215,15 @@ class DQN(RandomLearner):
         # we have a minibatch.  Let's do this.
         self.opt.zero_grad()
         s, a, s1, r, f = batch
-        q_online = self.qnet.calc_qval_batch(s, a)
-        assert len(q_online) == minibatch_size
+        q_online_all_a = self.qnet.calc_qval_batch(s)
+        q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
+        assert q_online.numel() == minibatch_size
         #q_online = q_online.view(-1)  #... for some reason, this causes everything to explode with huber loss, but makes warning go away
         with timebudget('q_target'):
-            q_s1_amax = []
-            for n in range(minibatch_size): #TODO: vectorize this...
-                if f[n]:
-                    # Final transition. No q next.
-                    q_s1_amax.append(0)
-                else:
-                    a1max = self.get_greedy_action(s1[n], use_target_network=True)
-                    q = self.qnet.calc_qval(s1[n,:], a1max)
-                    q_s1_amax.append(q)
-            q_s1_amax = torch.Tensor(q_s1_amax)
-            q_target = r + self.gamma * q_s1_amax
+            q_s1 = self.target_qnet.calc_qval_batch(s1)
+            q_s1_amax = q_s1.max(dim=1)[0]
+            future_r = (1-f) * self.gamma * q_s1_amax
+            q_target = r + future_r
 
         with timebudget('optimizer'):
             loss = self.loss_func(q_online, q_target)
