@@ -168,7 +168,7 @@ class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
     """
 
-    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr:float=1e-4):
         super().__init__(env)
         self.qnet = self.build_qnet(env, net_args)
         self.copy_to_target()
@@ -176,8 +176,7 @@ class DQN(RandomLearner):
         #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
         self.eps = eps
         self.gamma = gamma
-        self.opt = torch.optim.Adam(params=self.qnet.parameters(), lr=1e-4)
-        #self.opt = torch.optim.SGD(params=self.qnet.parameters(), lr=0.3)
+        self.opt = torch.optim.Adam(params=self.qnet.parameters(), lr=lr)
         self.iter_cnt = 0
         self.minibatch_size = 32  # HYPERPARAMETER
         self.show_loss_every = 1000 # HYPERPARAMETER
