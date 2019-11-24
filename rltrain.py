@@ -75,7 +75,7 @@ class DDPG(DQN):
         self._target_update(self.target_qnet, self.qnet, self.tau)
         self._target_update(self.target_munet, self.munet, self.tau)
 
-    def _target_update(target:nn.Module, online:nn.Module, tau:float):
+    def _target_update(self, target:nn.Module, online:nn.Module, tau:float):
         assert target.state_dict().keys() == online.state_dict().keys()
         update = target.state_dict()
         for key in target.state_dict().keys():
@@ -103,22 +103,23 @@ class DDPG(DQN):
         # Implement DDPG learning algorithm.
         s, a, s1, r, f = batch
 
+        makevec = lambda t: t.view(-1)
+
         # First update online Q network
         self.opt_q.zero_grad()
         self.qnet.train()
-        sa = torch.cat(s, a)
+        sa = torch.cat([s, a], dim=1)
         q_online = self.qnet.calc_qval_batch(sa)
-        # Pick the appropriate "a" column from all the actions. 
-        q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
         assert q_online.numel() == minibatch_size
-        q_online = q_online.view(-1)  # Must make this a single dim vector.
+        q_online = makevec(q_online)
         with timebudget('q_target'):
-            q_s1 = self.target_qnet.calc_qval_batch(s1)
-            q_s1_amax = q_s1.max(dim=1)[0]
-            future_r = (1-f) * self.gamma * q_s1_amax
+            a1 = self.target_munet.calc_qval_batch(s1)
+            s1a1 = torch.cat([s1, a1], dim=1)
+            q_s1a1 = self.target_qnet.calc_qval_batch(s1a1)
+            future_r = (1-f) * self.gamma * makevec(q_s1a1)
             q_target = r + future_r
 
-        with timebudget('optimizer'):
+        with timebudget('q_optimizer'):
             assert q_online.shape == q_target.shape  # Subtracting column vectors from row vectors leads to badness.
             loss = self.loss_func(q_online, q_target)
             if self.iter_cnt % self.show_loss_every == 0:

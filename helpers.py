@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm.auto import tqdm
+import warnings
 
 fix = lambda t: t.cpu().detach().numpy()
 
@@ -93,6 +94,14 @@ class PendulumViz(CartPoleViz):
         self.ydim = 2
         self.xtitle = "sin(th)"
         self.ytitle = "angular velocity"
+
+    def sample_qvals(self, N:int=3000):
+        ob = self.random_obs(N)
+        qb = self.learner.munet.calc_qval_batch(ob)
+        warnings.warn("These are mu values not Q values")
+        ob = fix(ob)
+        qb = fix(qb)
+        return ob, qb
 
     def random_obs(self, N):
         ob = (torch.rand(N, 3) - 0.5) * 6
