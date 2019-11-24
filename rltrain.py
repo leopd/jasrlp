@@ -170,8 +170,7 @@ class DQN(RandomLearner):
 
     def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr:float=1e-4):
         super().__init__(env)
-        self.qnet = self.build_qnet(env, net_args)
-        self.copy_to_target()
+        self.build_nets(env, net_args)
         self.loss_func = nn.SmoothL1Loss()  # huber loss
         #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
         self.eps = eps
@@ -183,8 +182,9 @@ class DQN(RandomLearner):
         self.minimum_transitions_in_replay = 10000 # HYPERPARAMETER
         self.copy_to_target_every = 1000 # HYPERPARAMETER
 
-    def build_qnet(self, env, net_args):
-        return FCNet.for_discrete_action(env, **net_args)
+    def build_nets(self, env, net_args):
+        self.qnet = FCNet.for_discrete_action(env, **net_args)
+        self.copy_to_target()
 
     def copy_to_target(self):
         """Copies the online Q network to the target network
@@ -202,9 +202,6 @@ class DQN(RandomLearner):
             #print(f"greedy: {a}")
             return a
 
-    def all_actions(self):
-        return range(self.env.action_space.n)
-
     def get_greedy_action(self, obs):
         with torch.no_grad():
             self.qnet.eval()
@@ -220,7 +217,7 @@ class DQN(RandomLearner):
         batch = self._replay.sample(minibatch_size)
         assert batch is not None
 
-        # we have a minibatch.  Let's do this.
+        # DQN training algorithm
         self.opt.zero_grad()
         self.qnet.train()
         s, a, s1, r, f = batch
@@ -264,6 +261,9 @@ class DDPG(DQN):
 
     def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
         super().__init__(env, eps, gamma, net_args)
+        del self.opt
+        self.opt_q = torch.optim.Adam(params=self.qnet.parameters())
+        self.opt_mu = torch.optim.Adam(params=self.munet.parameters())
 
     def init_env(self, env):
         self.env = env
@@ -273,24 +273,88 @@ class DDPG(DQN):
         assert self.act_space.__class__.__name__ == "Box", "Only Box action spaces supported"
         self.obs_dim = np.prod(self.obs_space.shape)
         self.act_dim = np.prod(self.act_space.shape)
+        self.tau = 0.001  # HYPERPARAMETER
 
-    def build_qnet(self, env, net_args):
-        print(f"Creating FCNet with {self.obs_dim}->{self.act_dim} dims for {self.obs_dim} observations and {self.act_dim} action dimensions")
+    def build_nets(self, env, net_args):
         if 'hidden_dims' not in net_args:
             net_args['hidden_dims'] = [64,64]
         net_args['activation'] = nn.Tanh  # gotta be for correct output scaling.
-        net_args['final_activation'] = True
-        net_args['output_scaling'] = box_scale(env.action_space)
-        qnet = FCNet(self.obs_dim, self.act_dim, **net_args)
-        return qnet
+        out_scale = box_scale(env.action_space)
 
-    def do_learning(self):
-        warnings.warn("Learning not implemented yet in DDPG")
-        pass
+        # Actor network: mu
+        in_dim = self.obs_dim
+        out_dim = self.act_dim
+        self.munet = FCNet(in_dim, out_dim, final_activation=True, output_scaling=out_scale, **net_args)
+        self.target_munet = copy.deepcopy(self.munet)
+        print(f"Actor (mu): {self.munet}")
+
+        # Critic network: q
+        in_dim = self.obs_dim + self.act_dim
+        out_dim = 1
+        self.qnet = FCNet(in_dim, out_dim, final_activation=False, **net_args)
+        self.target_qnet = copy.deepcopy(self.qnet)
+        print(f"Critic (Q): {self.qnet}")
+
+
+    def target_nets_elastic_follow(self):
+        """Update the two target networks with self.tau * the online network
+        """
+        self._target_update(self.target_qnet, self.qnet, self.tau)
+        self._target_update(self.target_munet, self.munet, self.tau)
+
+    def _target_update(target:nn.Module, online:nn.Module, tau:float):
+        assert target.state_dict().keys() == online.state_dict().keys()
+        update = target.state_dict()
+        for key in target.state_dict().keys():
+            old = target.state_dict()[key]
+            nu = online.state_dict()[key]
+            update[key] = old * (1.0 - tau) + tau * nu
+        target.load_state_dict(update)
+        target.eval()
 
     def get_greedy_action(self, obs):
         with torch.no_grad():
             self.qnet.eval()
-            action_batch_of_1 = self.qnet.calc_qval_batch([obs])
+            action_batch_of_1 = self.munet.calc_qval_batch([obs])
             action_vec = action_batch_of_1[0,:]
             return action_vec.cpu().numpy()
+
+    @timebudget
+    def do_learning(self):
+        if len(self._replay) < self.minimum_transitions_in_replay:
+            return
+        minibatch_size = self.minibatch_size
+        batch = self._replay.sample(minibatch_size)
+        assert batch is not None
+
+        # Implement DDPG learning algorithm.
+        s, a, s1, r, f = batch
+
+        # First update online Q network
+        self.opt_q.zero_grad()
+        self.qnet.train()
+        sa = torch.cat(s, a)
+        q_online = self.qnet.calc_qval_batch(sa)
+        # Pick the appropriate "a" column from all the actions. 
+        q_online = q_online_all_a.gather(1, a.long().view(-1,1))  # Magic: https://discuss.pytorch.org/t/select-specific-columns-of-each-row-in-a-torch-tensor/497
+        assert q_online.numel() == minibatch_size
+        q_online = q_online.view(-1)  # Must make this a single dim vector.
+        with timebudget('q_target'):
+            q_s1 = self.target_qnet.calc_qval_batch(s1)
+            q_s1_amax = q_s1.max(dim=1)[0]
+            future_r = (1-f) * self.gamma * q_s1_amax
+            q_target = r + future_r
+
+        with timebudget('optimizer'):
+            assert q_online.shape == q_target.shape  # Subtracting column vectors from row vectors leads to badness.
+            loss = self.loss_func(q_online, q_target)
+            if self.iter_cnt % self.show_loss_every == 0:
+                print(f"Loss = {loss:.5f}")
+            loss.backward()
+            self.opt_q.step()
+
+        # Update actor network
+        warnings.warn("actor network update not implemented")
+
+        # Move target networks
+        self.target_nets_elastic_follow()
