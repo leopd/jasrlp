@@ -84,3 +84,17 @@ class MountainCarViz(CartPoleViz):
         ob = (torch.rand(N, self.obs_dim) - 0.5) * 10
         return ob
 
+
+class PendulumViz(CartPoleViz):
+
+    def __init__(self, learner):
+        super().__init__(learner)
+        self.xdim = 0
+        self.ydim = 1
+        self.xtitle = "position?"
+        self.ytitle = "velocity?"
+
+    def random_obs(self, N):
+        ob = (torch.rand(N, self.obs_dim) - 0.5) * 10
+        return ob
+
