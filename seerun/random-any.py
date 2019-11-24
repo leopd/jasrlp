@@ -38,7 +38,7 @@ def main(args):
         env.render()
         action = env.action_space.sample()
         obs, r, is_done, info = env.step(action)
-        print(obs)
+        print(f"R:{r} O:{obs}")
         if is_done:
             print("Done")
             time.sleep(2)
