@@ -89,12 +89,20 @@ class PendulumViz(CartPoleViz):
 
     def __init__(self, learner):
         super().__init__(learner)
-        self.xdim = 0
-        self.ydim = 1
-        self.xtitle = "position?"
-        self.ytitle = "velocity?"
+        self.xdim = 1
+        self.ydim = 2
+        self.xtitle = "sin(th)"
+        self.ytitle = "angular velocity"
 
     def random_obs(self, N):
-        ob = (torch.rand(N, self.obs_dim) - 0.5) * 10
+        ob = (torch.rand(N, 3) - 0.5) * 6
+        th = ob[:,0]
+        ob[:,0] = torch.cos(th)
+        ob[:,1] = torch.sin(th)
         return ob
+
+    def plot_q(self):
+        ob,qb = self.sample_qvals()
+        self.plot_a_general(ob, qb[:,0], "Torque")
+        plt.show()
 
