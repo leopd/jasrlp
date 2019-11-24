@@ -31,6 +31,7 @@ class CartPoleViz():
         self.ytitle = "angular velocity"
 
     def random_obs(self, N):
+        #TODO: use the ranges from the environment
         ob = (torch.rand(N, self.obs_dim) - 0.5) * 3.14
         ob[:,0:2] *= 0
         return ob
