@@ -52,11 +52,11 @@ class DampedRandomWalk():
 
 class DDPG(DQN):
 
-    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr=1e-4):
         super().__init__(env, eps, gamma, net_args)
         del self.opt
-        self.opt_q = torch.optim.Adam(params=self.qnet.parameters())
-        self.opt_mu = torch.optim.Adam(params=self.munet.parameters())
+        self.opt_q = torch.optim.Adam(params=self.qnet.parameters(), lr=lr)
+        self.opt_mu = torch.optim.Adam(params=self.munet.parameters(), lr=lr)
         self.init_noise()
 
     def init_env(self, env):
@@ -156,10 +156,8 @@ class DDPG(DQN):
             future_r = (1-f) * self.gamma * makevec(q_s1a1)
             q_target = r + future_r
             assert q_online.shape == q_target.shape  # Subtracting column vectors from row vectors leads to badness.
-            loss = self.loss_func(q_online, q_target)
-            if self.iter_cnt % self.show_loss_every == 0:
-                print(f"Loss = {loss:.5f}")
-            loss.backward()
+            critic_loss = self.loss_func(q_online, q_target)
+            critic_loss.backward()
             self.opt_q.step()
 
         # Update actor network
@@ -171,6 +169,9 @@ class DDPG(DQN):
             mu_loss = (-J).mean()
             mu_loss.backward()
             self.opt_mu.step()
+
+        if self.iter_cnt % self.show_loss_every == 0:
+            print(f"Critic Loss = {critic_loss:.5f}.  Mu loss = {mu_loss:.5f}")
 
         # Move target networks
         with timebudget('move_targets'):
