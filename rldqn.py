@@ -67,6 +67,7 @@ class RandomLearner():
         self.action_space = env.action_space
         self._replay = ReplayBuffer()
         self.reward_history = []
+        self.rollout_max_iter = 1000  # HYPERPARAMETER
 
     def init_env(self, env):
         self.env = env
@@ -89,20 +90,21 @@ class RandomLearner():
         self._replay.append(t)
 
     @timebudget
-    def rollout(self, max_iter:int=1000, render:bool=False) -> Tuple[int, float]:
+    def rollout(self, render:bool=False) -> Tuple[int, float]:
         """Runs an episode from reset to done. Returns number of iterations and total reward
         """
         obs_last = self.env.reset()
         total_reward = 0
         start_time = time.time()
-        for cnt in range(max_iter):
+        for cnt in range(self.rollout_max_iter):
             if render:
                 self.env.render()
-            action = self.get_action(obs_last)
-            obs, reward, is_done, info = self.env.step(action)
-            self.record_transition(obs_last, action, obs, reward, is_done)
-            total_reward += reward
-            obs_last = obs
+            with timebudget('rollout-forwards'):
+                action = self.get_action(obs_last)
+                obs, reward, is_done, info = self.env.step(action)
+                self.record_transition(obs_last, action, obs, reward, is_done)
+                total_reward += reward
+                obs_last = obs
             if is_done:
                 break
             self.do_learning()

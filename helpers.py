@@ -22,8 +22,10 @@ def rollout_score_dist(learner, eps:float, n:int=100, hist:bool=True) -> [list, 
 
 
 class GenericViz():
+
     def __init__(self, learner):
         self.learner = learner
+        self.env = learner.env
         self.obs_dim = learner.obs_dim
 
     def plot_history(self):
@@ -33,7 +35,49 @@ class GenericViz():
         self.plot_history()
         plt.show()
 
-class CartPoleViz(GenericViz):
+class GenericQViz(GenericViz):
+
+    def __init__(self, learner):
+        super().__init__(learner)
+        self.xdim = 0
+        self.ydim = 1
+        self.xtitle = "obs dim0"
+        self.ytitle = "obs dim1"
+
+    def random_obs(self, N):
+        #TODO: use the ranges from the environment
+        ob = (torch.rand(N, self.obs_dim) - 0.5) * 5
+        return ob
+
+    def sample_qvals(self, N:int=3000):
+        ob = self.random_obs(N)
+        qb = self.learner.qnet(ob)
+        ob = fix(ob)
+        qb = fix(qb)
+        return ob, qb
+
+    def plot_a_general(self, ob, c, title):
+        plt.scatter(x=ob[:,self.xdim],y=ob[:,self.ydim], c=c, alpha=0.5)
+        plt.xlabel(self.xtitle)
+        plt.ylabel(self.ytitle)
+        plt.title(title)
+        plt.colorbar()
+
+    def plot_generic_q(self):
+        ob,qb = self.sample_qvals()
+        self.plot_a_general(ob, qb[:,0], "Q dim 0")
+        plt.show()
+
+    def plot_q(self):
+        plt.figure(figsize=(15,5))
+        plt.subplot(1,2,1)
+        self.plot_generic_q()
+        plt.subplot(1,2,2)
+        self.plot_history()
+        plt.show()
+
+
+class CartPoleViz(GenericQViz):
 
     def __init__(self, learner):
         super().__init__(learner)
@@ -47,21 +91,6 @@ class CartPoleViz(GenericViz):
         ob = (torch.rand(N, self.obs_dim) - 0.5) * 3.14
         ob[:,0:2] *= 0
         return ob
-
-
-    def sample_qvals(self, N:int=3000):
-        ob = self.random_obs(N)
-        qb = self.learner.qnet.calc_qval_batch(ob)
-        ob = fix(ob)
-        qb = fix(qb)
-        return ob, qb
-
-    def plot_a_general(self, ob, c, title):
-        plt.scatter(x=ob[:,self.xdim],y=ob[:,self.ydim], c=c, alpha=0.5)
-        plt.xlabel(self.xtitle)
-        plt.ylabel(self.ytitle)
-        plt.title(title)
-        plt.colorbar()
 
     def plot_a0a1a10(self, ob, qb):
         plt.figure(figsize=(15,5))
@@ -114,7 +143,7 @@ class PendulumViz(CartPoleViz):
         ob[:,0] = torch.cos(th)
         ob[:,1] = torch.sin(th)
         ob[:,2] = not_ob[:,1]
-        qb = self.learner.munet.calc_qval_batch(ob)
+        qb = self.learner.munet(ob)
         not_ob = fix(not_ob)
         qb = fix(qb)
         return not_ob, qb
