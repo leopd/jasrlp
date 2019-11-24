@@ -21,11 +21,22 @@ def rollout_score_dist(learner, eps:float, n:int=100, hist:bool=True) -> [list, 
     return rewards, frames
 
 
-class CartPoleViz():
-
+class GenericViz():
     def __init__(self, learner):
         self.learner = learner
         self.obs_dim = learner.obs_dim
+
+    def plot_history(self):
+        plt.plot(self.learner.reward_history)
+
+    def plot_q(self):
+        self.plot_history()
+        plt.show()
+
+class CartPoleViz(GenericViz):
+
+    def __init__(self, learner):
+        super().__init__(learner)
         self.xdim = 2
         self.xtitle = "angle"
         self.ydim = 3
@@ -36,6 +47,7 @@ class CartPoleViz():
         ob = (torch.rand(N, self.obs_dim) - 0.5) * 3.14
         ob[:,0:2] *= 0
         return ob
+
 
     def sample_qvals(self, N:int=3000):
         ob = self.random_obs(N)
@@ -90,28 +102,29 @@ class PendulumViz(CartPoleViz):
 
     def __init__(self, learner):
         super().__init__(learner)
-        self.xdim = 1
-        self.ydim = 2
-        self.xtitle = "sin(th)"
+        self.xdim = 0
+        self.ydim = 1
+        self.xtitle = "theta"
         self.ytitle = "angular velocity"
 
     def sample_qvals(self, N:int=3000):
-        ob = self.random_obs(N)
-        qb = self.learner.munet.calc_qval_batch(ob)
-        warnings.warn("These are mu values not Q values")
-        ob = fix(ob)
-        qb = fix(qb)
-        return ob, qb
-
-    def random_obs(self, N):
-        ob = (torch.rand(N, 3) - 0.5) * 6
-        th = ob[:,0]
+        not_ob = (torch.rand(N, 2) - 0.5) * 10
+        ob = torch.zeros(N,3)
+        th = not_ob[:,0]
         ob[:,0] = torch.cos(th)
         ob[:,1] = torch.sin(th)
-        return ob
+        ob[:,2] = not_ob[:,1]
+        qb = self.learner.munet.calc_qval_batch(ob)
+        not_ob = fix(not_ob)
+        qb = fix(qb)
+        return not_ob, qb
 
     def plot_q(self):
         ob,qb = self.sample_qvals()
+        plt.figure(figsize=(15,5))
+        plt.subplot(1,2,1)
         self.plot_a_general(ob, qb[:,0], "Torque")
+        plt.subplot(1,2,2)
+        self.plot_history()
         plt.show()
 
