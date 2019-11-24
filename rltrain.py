@@ -1,5 +1,6 @@
 import copy
 from collections import deque
+import gym
 import numpy as np
 import random
 import time
@@ -123,7 +124,7 @@ class QNetBase(nn.Module):
 # More efficient, and easier for the net to distinguish appropriate actions.
 class FCNet(QNetBase):
 
-    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], activation=nn.ReLU):
+    def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], activation=nn.ReLU, final_activation:bool=False, output_scaling:float=1.0):
         super().__init__()
         layer_dims = [input_dim] + hidden_dims + [output_classes]
         layers = []
@@ -132,11 +133,13 @@ class FCNet(QNetBase):
             out_dim = layer_dims[i+1]
             layers.append(nn.Linear(in_dim, out_dim))
             layers.append(activation())
-        layers = layers[:-1]  # remove last ReLU
+        if not final_activation:
+            layers = layers[:-1]  # remove last activation
         self.layers = nn.Sequential(*layers)
+        self.output_scaling = output_scaling
 
     def forward(self, x:Tensor) -> Tensor:
-        act = self.layers(x)
+        act = self.layers(x) * self.output_scaling
         # No final activation since we're regressing
         return act
 
@@ -149,7 +152,7 @@ class FCNet(QNetBase):
         return out
 
     @classmethod
-    def for_env(cls, env, hidden_dims=[64,64], activation=nn.Tanh) -> "FCNet":
+    def for_discrete_action(cls, env, hidden_dims=[64,64], activation=nn.Tanh) -> "FCNet":
         obs_space = env.observation_space
         assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
         act_space = env.action_space
@@ -167,7 +170,7 @@ class DQN(RandomLearner):
 
     def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
         super().__init__(env)
-        self.qnet = FCNet.for_env(env, **net_args)
+        self.qnet = self.build_qnet(env, net_args)
         self.copy_to_target()
         self.loss_func = nn.SmoothL1Loss()  # huber loss
         #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
@@ -180,6 +183,9 @@ class DQN(RandomLearner):
         self.show_loss_every = 1000 # HYPERPARAMETER
         self.minimum_transitions_in_replay = 10000 # HYPERPARAMETER
         self.copy_to_target_every = 1000 # HYPERPARAMETER
+
+    def build_qnet(self, env, net_args):
+        return FCNet.for_discrete_action(env, **net_args)
 
     def copy_to_target(self):
         """Copies the online Q network to the target network
@@ -242,3 +248,50 @@ class DQN(RandomLearner):
         if self.iter_cnt % self.copy_to_target_every == 0:
             self.copy_to_target()
 
+
+def box_scale(space:gym.spaces.box.Box) -> float:
+    """Returns the scaling factor for an action space.  If the action space is [-2,2] Box, this outputs 2.
+    Lots of assertions assuming all dimensions are the same.
+    """
+    lo = min(space.low)
+    assert lo == max(space.low), "Action space is anisotropic"
+    hi = min(space.high)
+    assert hi == max(space.high), "Action space is anisotropic"
+    assert lo == (-hi), "Action space is assymetric"
+    return hi
+
+
+class DDPG(DQN):
+
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
+        super().__init__(env, eps, gamma, net_args)
+
+    def init_env(self, env):
+        self.env = env
+        self.obs_space = env.observation_space
+        assert self.obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
+        self.act_space = env.action_space
+        assert self.act_space.__class__.__name__ == "Box", "Only Box action spaces supported"
+        self.obs_dim = np.prod(self.obs_space.shape)
+        self.act_dim = np.prod(self.act_space.shape)
+
+    def build_qnet(self, env, net_args):
+        print(f"Creating FCNet with {self.obs_dim}->{self.act_dim} dims for {self.obs_dim} observations and {self.act_dim} action dimensions")
+        if 'hidden_dims' not in net_args:
+            net_args['hidden_dims'] = [64,64]
+        net_args['activation'] = nn.Tanh  # gotta be for correct output scaling.
+        net_args['final_activation'] = True
+        net_args['output_scaling'] = box_scale(env.action_space)
+        qnet = FCNet(self.obs_dim, self.act_dim, **net_args)
+        return qnet
+
+    def do_learning(self):
+        warnings.warn("Learning not implemented yet in DDPG")
+        pass
+
+    def get_greedy_action(self, obs):
+        with torch.no_grad():
+            self.qnet.eval()
+            action_batch_of_1 = self.qnet.calc_qval_batch([obs])
+            action_vec = action_batch_of_1[0,:]
+            return action_vec.cpu().numpy()

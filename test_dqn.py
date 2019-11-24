@@ -16,7 +16,7 @@ def test_mcar_random():
 
 def test_qval_batch():
     env = gym.make('MountainCar-v0')
-    qnet = rltrain.FCNet.for_env(env)
+    qnet = rltrain.FCNet.for_discrete_action(env)
     N = 50
     obs = []
     # Generate some valid observations any which way

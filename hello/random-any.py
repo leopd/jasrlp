@@ -31,6 +31,8 @@ def main(args):
         return
         
     env = gym.make(args.env)
+    print(f"observation space: {env.observation_space}")
+    print(f"action space: {env.action_space}")
     env.reset()
     for _ in range(1000):
         env.render()
