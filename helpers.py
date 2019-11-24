@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 fix = lambda t: t.cpu().detach().numpy()
 
@@ -8,7 +9,7 @@ def rollout_score_dist(learner, eps:float, n:int=100, hist:bool=True) -> [list, 
     learner.eps = eps
     frames = []
     rewards = []
-    for i in range(100):
+    for i in tqdm(range(n)):
         f, r = learner.rollout(render=False)
         frames.append(f)
         rewards.append(r)
@@ -24,19 +25,27 @@ class CartPoleViz():
     def __init__(self, learner):
         self.learner = learner
         self.obs_dim = learner.obs_dim
-        self.obs_scale = 3.14 / 2
+        self.xdim = 2
+        self.xtitle = "angle"
+        self.ydim = 3
+        self.ytitle = "angular velocity"
+
+    def random_obs(self, N):
+        ob = (torch.rand(N, self.obs_dim) - 0.5) * 3.14
+        ob[:,0:2] *= 0
+        return ob
 
     def sample_qvals(self, N:int=3000):
-        ob = (torch.rand(N, self.obs_dim) - 0.5) * self.obs_scale * 2
-        ob[:,0:2] *= 0
+        ob = self.random_obs(N)
         qb = self.learner.qnet.calc_qval_batch(ob)
         ob = fix(ob)
         qb = fix(qb)
         return ob, qb
 
     def plot_a_general(self, ob, c, title):
-        plt.scatter(x=ob[:,2],y=ob[:,3], c=c, alpha=0.5)
-        plt.xlabel("angle"); plt.ylabel("angle speed")
+        plt.scatter(x=ob[:,self.xdim],y=ob[:,self.ydim], c=c, alpha=0.5)
+        plt.xlabel(self.xtitle)
+        plt.ylabel(self.ytitle)
         plt.title(title)
         plt.colorbar()
 
@@ -60,7 +69,17 @@ class CartPoleViz():
         self.plot_a0a1a10(ob, qb)
         plt.show()
 
-def MountainCarViz(CartPoleViz):
+
+class MountainCarViz(CartPoleViz):
 
     def __init__(self, learner):
-        super().__init__(learneR)
+        super().__init__(learner)
+        self.xdim = 0
+        self.ydim = 1
+        self.xtitle = "position?"
+        self.ytitle = "velocity?"
+
+    def random_obs(self, N):
+        ob = (torch.rand(N, self.obs_dim) - 0.5) * 10
+        return ob
+

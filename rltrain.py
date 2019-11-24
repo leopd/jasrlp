@@ -149,7 +149,7 @@ class FCNet(QNetBase):
         return out
 
     @classmethod
-    def for_env(cls, env) -> "FCNet":
+    def for_env(cls, env, hidden_dims=[64,64], activation=nn.Tanh) -> "FCNet":
         obs_space = env.observation_space
         assert obs_space.__class__.__name__ == "Box", "Only Box observation spaces supported"
         act_space = env.action_space
@@ -157,8 +157,7 @@ class FCNet(QNetBase):
         obs_dim = np.prod(obs_space.shape)
         act_dim = act_space.n
         print(f"Creating FCNet with {obs_dim}->{act_dim} dims for {obs_dim} observations and {act_dim} actions")
-        qnet = FCNet(obs_dim, act_dim, hidden_dims=[64], activation=nn.Tanh)
-        #qnet = FCNet(obs_dim, act_dim, hidden_dims=[32,32], activation=nn.ReLU)
+        qnet = FCNet(obs_dim, act_dim, hidden_dims=hidden_dims, activation=activation)
         return qnet
 
 
@@ -166,9 +165,9 @@ class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
     """
 
-    def __init__(self, env, eps:float=0.5, gamma:float=0.99):
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}):
         super().__init__(env)
-        self.qnet = FCNet.for_env(env)
+        self.qnet = FCNet.for_env(env, **net_args)
         self.copy_to_target()
         self.loss_func = nn.SmoothL1Loss()  # huber loss
         #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
