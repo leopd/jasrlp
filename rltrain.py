@@ -96,6 +96,7 @@ class DDPG(DQN):
     def do_learning(self):
         if len(self._replay) < self.minimum_transitions_in_replay:
             return
+        self.iter_cnt += 1
         minibatch_size = self.minibatch_size
         batch = self._replay.sample(minibatch_size)
         assert batch is not None
@@ -106,20 +107,16 @@ class DDPG(DQN):
         makevec = lambda t: t.view(-1)
 
         # First update online Q network
-        self.opt_q.zero_grad()
-        self.qnet.train()
-        sa = torch.cat([s, a], dim=1)
-        q_online = self.qnet.calc_qval_batch(sa)
-        assert q_online.numel() == minibatch_size
-        q_online = makevec(q_online)
-        with timebudget('q_target'):
-            a1 = self.target_munet.calc_qval_batch(s1)
-            s1a1 = torch.cat([s1, a1], dim=1)
-            q_s1a1 = self.target_qnet.calc_qval_batch(s1a1)
+        with timebudget('critic_update'):
+            self.opt_q.zero_grad()
+            self.qnet.train()
+            q_online = self.qnet.forward_cat(s,a)
+            assert q_online.numel() == minibatch_size
+            q_online = makevec(q_online)
+            a1 = self.target_munet(s1)
+            q_s1a1 = self.target_qnet.forward_cat(s1,a1)
             future_r = (1-f) * self.gamma * makevec(q_s1a1)
             q_target = r + future_r
-
-        with timebudget('q_optimizer'):
             assert q_online.shape == q_target.shape  # Subtracting column vectors from row vectors leads to badness.
             loss = self.loss_func(q_online, q_target)
             if self.iter_cnt % self.show_loss_every == 0:
@@ -128,7 +125,15 @@ class DDPG(DQN):
             self.opt_q.step()
 
         # Update actor network
-        warnings.warn("actor network update not implemented")
+        with timebudget('actor_update'):
+            self.opt_mu.zero_grad()
+            self.munet.train()
+            # Calculate expected return over the sampled transitions for the online actor & critic
+            J = self.qnet.forward_cat(s, self.munet(s))
+            mu_loss = (-J).mean()
+            mu_loss.backward()
+            self.opt_mu.step()
 
         # Move target networks
-        self.target_nets_elastic_follow()
+        with timebudget('move_targets'):
+            self.target_nets_elastic_follow()

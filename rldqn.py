@@ -66,6 +66,7 @@ class RandomLearner():
         self.env = env
         self.action_space = env.action_space
         self._replay = ReplayBuffer()
+        self.reward_history = []
 
     def init_env(self, env):
         self.env = env
@@ -109,6 +110,7 @@ class RandomLearner():
         fps = cnt / elapsed
         #print(f"Episode reward: {total_reward}. {cnt} frames at {fps:.1f}fps")
         self.env.close()
+        self.reward_history.append(total_reward)
         return cnt, total_reward
 
     def do_learning(self):
@@ -146,10 +148,17 @@ class FCNet(QNetBase):
     def calc_qval_batch(self, observations):
         """Calculates a minibatch of q-values
         """
+        warnings.warn("calc_qval_batch can usually be replaced with just forward()")
         o_tensor = Tensor(observations)
         qin = o_tensor
         out = self.forward(qin)
         return out
+
+    def forward_cat(self, state:Tensor, action:Tensor):
+        """When the network takes both state and actions as inputs, this fuses them together first
+        """
+        sa = torch.cat([state, action], dim=1)
+        return self.forward(sa)
 
     @classmethod
     def for_discrete_action(cls, env, hidden_dims=[64,64], activation=nn.Tanh) -> "FCNet":
