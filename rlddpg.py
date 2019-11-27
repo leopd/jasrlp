@@ -52,8 +52,8 @@ class DampedRandomWalk():
 
 class DDPG(DQN):
 
-    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr=1e-4):
-        super().__init__(env, eps, gamma, net_args)
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr=1e-4, buffer_size:int=100000):
+        super().__init__(env, eps, gamma, net_args, buffer_size)
         del self.opt
         self.opt_q = torch.optim.Adam(params=self.qnet.parameters(), lr=lr)
         self.opt_mu = torch.optim.Adam(params=self.munet.parameters(), lr=lr)

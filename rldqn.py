@@ -61,11 +61,11 @@ class ReplayBuffer():
 
 class RandomLearner():
 
-    def __init__(self, env):
+    def __init__(self, env, buffer_size:int=100000):
         self.init_env(env)
         self.env = env
         self.action_space = env.action_space
-        self._replay = ReplayBuffer()
+        self._replay = ReplayBuffer(size=buffer_size)
         self.reward_history = []
         self.rollout_max_iter = 1000  # HYPERPARAMETER
 
@@ -124,8 +124,6 @@ class QNetBase(nn.Module):
     pass
 
 
-#TODO: refactor all this so that the net outputs a Q value for each class simultaneously.
-# More efficient, and easier for the net to distinguish appropriate actions.
 class FCNet(QNetBase):
 
     def __init__(self, input_dim:int, output_classes:int, hidden_dims:List[int], activation=nn.ReLU, final_activation:bool=False, output_scaling:float=1.0):
@@ -179,8 +177,8 @@ class DQN(RandomLearner):
     """We expect whatever code is using this thing to manually set the eps-greedy schedule explicitly.
     """
 
-    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr:float=1e-4):
-        super().__init__(env)
+    def __init__(self, env, eps:float=0.5, gamma:float=0.99, net_args:dict={}, lr:float=1e-4, buffer_size:int=100000):
+        super().__init__(env, buffer_size)
         self.build_nets(env, net_args)
         self.loss_func = nn.SmoothL1Loss()  # huber loss
         #self.loss_func = lambda x,y: ((x-y)**2).mean()  # MSE
